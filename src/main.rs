@@ -436,7 +436,7 @@ fn main() {
     //find .text to start disas
     for header in shdr {
         let strname = strtab
-            .get(header.sh_name.try_into().expect("eisa vlakas"))
+            .get(header.sh_name.try_into().expect("Can not read header"))
             .unwrap();
         if (strname == ".text") {
             text_section_addr = header.sh_addr;
