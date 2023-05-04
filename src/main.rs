@@ -149,7 +149,10 @@ fn flags(rf: u32) -> String {
     sb
 }
 
-fn find_traits(code: &[u8], addr: u64) {
+fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64) {
+
+    let code = &binary[(addr) as usize..(addr + 0xfff) as usize];
+
     //Must then check all the calls for possible trait objects
     let mut instruction_queue = Vec::new();
     let mut function_call_queue: Queue<(u64, Instruction)> = queue![];
@@ -186,6 +189,10 @@ fn find_traits(code: &[u8], addr: u64) {
         // let info = info_factory.info(&instr);
         let fpu_info = instr.fpu_stack_increment_info();
 
+        if instr.mnemonic() == Mnemonic::Ret{
+            break;
+        }
+
         if (instr.mnemonic() == Mnemonic::Call) {
             function_call_queue.add((instr.ip(), instr));
 
@@ -199,17 +206,21 @@ fn find_traits(code: &[u8], addr: u64) {
         
                     if (reg_info.access() == OpAccess::Write) {
                         if (reg_info.register() == Register::RSI) {
-                            println!("    V-Table Address: {:x}", ins.memory_displacement64());
-                            println!("TRAIT OBJECT");
-                            trait_object_call = true;
-                            break;
+                            if ins.memory_displacement64()>=data_rel_addr && ins.memory_displacement64()<= data_rel_addr+data_rel_size{
+                                println!("    V-Table Address: {:x}", ins.memory_displacement64());
+                                println!("TRAIT OBJECT");
+                                trait_object_call = true;
+                                break;
+                            }
                             // rsi_reg_val = (ins.memory_displacement64(), *ins);
                         }
                         if (reg_info.register() == Register::RCX) {
-                            println!("    V-Table Address: {:x}", ins.memory_displacement64());
-                            println!("TRAIT OBJECT");
-                            trait_object_call = true;
-                            break;
+                            if ins.memory_displacement64()>=data_rel_addr && ins.memory_displacement64()<= data_rel_addr+data_rel_size{
+                                println!("    V-Table Address: {:x}", ins.memory_displacement64());
+                                println!("TRAIT OBJECT");
+                                trait_object_call = true;
+                                break;
+                            }
                             // rcx_reg_val = (ins.memory_displacement64(), ins);
                         }
                     }
@@ -220,147 +231,10 @@ fn find_traits(code: &[u8], addr: u64) {
                 }
             }
 
-            // for ins in &instruction_queue[instruction_queue.len() - 5..instruction_queue.len()]{
-            //     let ins_op_code = ins.op_code();
-            //     let ins_info = info_factory.info(ins);
-            //     let mut trait_object_call = false;
-            //     for reg_info in ins_info.used_registers() {
-                    
-        
-            //         if (reg_info.access() == OpAccess::Write) {
-            //             if (reg_info.register() == Register::RSI) {
-            //                 println!("    V-Table Address: {:x}", ins.memory_displacement64());
-            //                 println!("TRAIT OBJECT");
-            //                 trait_object_call = true;
-            //                 break;
-            //                 // rsi_reg_val = (ins.memory_displacement64(), *ins);
-            //             }
-            //             if (reg_info.register() == Register::RCX) {
-            //                 println!("    V-Table Address: {:x}", ins.memory_displacement64());
-            //                 println!("TRAIT OBJECT");
-            //                 trait_object_call = true;
-            //                 break;
-            //                 // rcx_reg_val = (ins.memory_displacement64(), ins);
-            //             }
-            //         }
-            //     }
-
-            //     if(trait_object_call){
-            //         break;
-            //     }
-
-            // }
-
-            
         }
 
-        println!("    OpCode: {}", op_code.op_code_string());
-        println!("    Instruction: {}", op_code.instruction_string());
-        println!("    Encoding: {:?}", instr.encoding());
-        println!("    Mnemonic: {:?}", instr.mnemonic());
-        println!("    Code: {:?}", instr.code());
-        println!(
-            "    CpuidFeature: {}",
-            instr
-                .cpuid_features()
-                .iter()
-                .map(|&a| format!("{:?}", a))
-                .collect::<Vec<String>>()
-                .join(" and ")
-        );
-        println!("    FlowControl: {:?}", instr.flow_control());
-        if fpu_info.writes_top() {
-            if fpu_info.increment() == 0 {
-                println!("    FPU TOP: the instruction overwrites TOP");
-            } else {
-                println!("    FPU TOP inc: {}", fpu_info.increment());
-            }
-            println!(
-                "    FPU TOP cond write: {}",
-                if fpu_info.conditional() {
-                    "true"
-                } else {
-                    "false"
-                }
-            );
-        }
-        if offsets.has_displacement() {
-            println!(
-                "    Displacement offset = {}, size = {}",
-                offsets.displacement_offset(),
-                offsets.displacement_size()
-            );
-        }
-        if offsets.has_immediate() {
-            println!(
-                "    Immediate offset = {}, size = {}",
-                offsets.immediate_offset(),
-                offsets.immediate_size()
-            );
-        }
-        if offsets.has_immediate2() {
-            println!(
-                "    Immediate #2 offset = {}, size = {}",
-                offsets.immediate_offset2(),
-                offsets.immediate_size2()
-            );
-        }
-        if instr.is_stack_instruction() {
-            println!("    SP Increment: {}", instr.stack_pointer_increment());
-        }
-        if instr.condition_code() != ConditionCode::None {
-            println!("    Condition code: {:?}", instr.condition_code());
-        }
-        if instr.rflags_read() != RflagsBits::NONE {
-            println!("    RFLAGS Read: {}", flags(instr.rflags_read()));
-        }
-        if instr.rflags_written() != RflagsBits::NONE {
-            println!("    RFLAGS Written: {}", flags(instr.rflags_written()));
-        }
-        if instr.rflags_cleared() != RflagsBits::NONE {
-            println!("    RFLAGS Cleared: {}", flags(instr.rflags_cleared()));
-        }
-        if instr.rflags_set() != RflagsBits::NONE {
-            println!("    RFLAGS Set: {}", flags(instr.rflags_set()));
-        }
-        if instr.rflags_undefined() != RflagsBits::NONE {
-            println!("    RFLAGS Undefined: {}", flags(instr.rflags_undefined()));
-        }
-        if instr.rflags_modified() != RflagsBits::NONE {
-            println!("    RFLAGS Modified: {}", flags(instr.rflags_modified()));
-        }
-        if instr.op_kinds().any(|op_kind| op_kind == OpKind::Memory) {
-            let size = instr.memory_size().size();
-            if size != 0 {
-                println!("    Memory size: {}", size);
-            }
-        }
-        // for i in 0..instr.op_count() {
-        //     println!("    Op{}Access: {:?}", i, info.op_access(i));
-        // }
-        // for i in 0..op_code.op_count() {
-        //     println!("    Op{}: {:?}", i, op_code.op_kind(i));
-        // }
-        // for reg_info in info.used_registers() {
-        //     println!("    Used reg: {:?}", reg_info);
-
-        //     if (reg_info.access() == OpAccess::Write) {
-        //         if (reg_info.register() == Register::RSI) {
-        //             println!("    V-Table Address: {:x}", instr.memory_displacement64());
-
-        //             rsi_reg_val = (instr.memory_displacement64(), instr);
-        //         }
-        //         if (reg_info.register() == Register::RCX) {
-        //             println!("    V-Table Address: {:x}", instr.memory_displacement64());
-
-        //             rcx_reg_val = (instr.memory_displacement64(), instr);
-        //         }
-        //     }
-        // }
-        // for mem_info in info.used_memory() {
-        //     println!("    Used mem: {:?}", mem_info);
-        // }
     }
+
 
     // let instructions = handler.disasm_all(code, addr).unwrap();
 
@@ -432,16 +306,17 @@ fn main() {
 
     // let shstrndx = elf_file.ehdr.e_shstrndx;
 
-    let mut text_section_addr = 0;
-    //find .text to start disas
+    let mut data_rel_section = 0;
+    let mut data_rel_size = 0;
+    //find .data.rel.ro -> where v-tables are stored
     for header in shdr {
         let strname = strtab
             .get(header.sh_name.try_into().expect("Can not read header"))
             .unwrap();
-        if (strname == ".text") {
-            text_section_addr = header.sh_addr;
-            print!("{:#?} {:x}\n", strname, text_section_addr);
-            let text_bytes = elf_file.section_data(&header);
+        if (strname == ".data.rel.ro") {
+            data_rel_section = header.sh_addr;
+            data_rel_size = header.sh_size;
+            println!("{:#?} {:x} size: {:x}\n", strname, data_rel_section,data_rel_size);
         }
     }
 
@@ -472,7 +347,9 @@ fn main() {
     print!("User Main: {:x}\n", user_main + 7);
 
     find_traits(
-        &binary[(user_main + 7) as usize..(main_address + 7) as usize],
+        &binary,
         user_main + 7,
+        data_rel_section,
+        data_rel_size
     );
 }
