@@ -1,7 +1,14 @@
+// Add a vector of function addresses using nuclues
+// Since we know the range of each function's body we can disassemble only that portion
+// How the fuck do i add nucleus?????????
+// AND HOW DO I MAKE NUCLEUS WORK????????????????????
+
+
 use std::{
     collections::HashMap,
     env::{self, args},
-    fs::read, slice::SplitInclusiveMut,
+    fs::{read, File},
+    slice::SplitInclusiveMut, io::{BufReader, BufRead},
 };
 
 use capstone::{
@@ -62,9 +69,9 @@ fn locate_main(code: &[u8], addr: u64, handler: &Capstone) -> u64 {
         )
         .expect("Instructions not found");
 
-    let main_addr = (dis.as_ref()[0].bytes()[4] as u64 * 16 * 16)
-        + (dis.as_ref()[0].bytes()[3] as u64)
-        + dis.as_ref()[0].address();
+    let main_addr = (dis.as_ref()[0].bytes()[5] as u64 * 16 * 16 * 16 * 16)
+                        + (dis.as_ref()[0].bytes()[4] as u64 * 16 * 16)
+                        + (dis.as_ref()[0].bytes()[3] as u64) + dis.as_ref()[0].address();
     return main_addr;
 }
 
@@ -150,7 +157,9 @@ fn flags(rf: u32) -> String {
 }
 
 fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64) {
-
+    //How to determine function's body??????????????????????????
+    //Consider loading function addresses using Nucleus?
+    
     let code = &binary[(addr) as usize..(addr + 0xfff) as usize];
 
     //Must then check all the calls for possible trait objects
@@ -189,24 +198,23 @@ fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64)
         // let info = info_factory.info(&instr);
         let fpu_info = instr.fpu_stack_increment_info();
 
-        if instr.mnemonic() == Mnemonic::Ret{
-            break;
-        }
+        
 
         if (instr.mnemonic() == Mnemonic::Call) {
             function_call_queue.add((instr.ip(), instr));
-
-            for i in (instruction_queue.len()-5 .. instruction_queue.len()-1).rev(){
+            //need a way to check instruction queue length
+            for i in (instruction_queue.len() - 3..instruction_queue.len() - 1).rev() {
                 let ins = &instruction_queue[i];
                 let ins_op_code = ins.op_code();
                 let ins_info = info_factory.info(ins);
                 let mut trait_object_call = false;
                 for reg_info in ins_info.used_registers() {
-                    
-        
+                    //This is not always right
                     if (reg_info.access() == OpAccess::Write) {
                         if (reg_info.register() == Register::RSI) {
-                            if ins.memory_displacement64()>=data_rel_addr && ins.memory_displacement64()<= data_rel_addr+data_rel_size{
+                            if ins.memory_displacement64() >= data_rel_addr
+                                && ins.memory_displacement64() <= data_rel_addr + data_rel_size
+                            {
                                 println!("    V-Table Address: {:x}", ins.memory_displacement64());
                                 println!("TRAIT OBJECT");
                                 trait_object_call = true;
@@ -215,7 +223,9 @@ fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64)
                             // rsi_reg_val = (ins.memory_displacement64(), *ins);
                         }
                         if (reg_info.register() == Register::RCX) {
-                            if ins.memory_displacement64()>=data_rel_addr && ins.memory_displacement64()<= data_rel_addr+data_rel_size{
+                            if ins.memory_displacement64() >= data_rel_addr
+                                && ins.memory_displacement64() <= data_rel_addr + data_rel_size
+                            {
                                 println!("    V-Table Address: {:x}", ins.memory_displacement64());
                                 println!("TRAIT OBJECT");
                                 trait_object_call = true;
@@ -226,15 +236,12 @@ fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64)
                     }
                 }
 
-                if(trait_object_call){
+                if (trait_object_call) {
                     break;
                 }
             }
-
         }
-
     }
-
 
     // let instructions = handler.disasm_all(code, addr).unwrap();
 
@@ -278,6 +285,22 @@ fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64)
 
 // print!("{:x?}",function_queue);
 
+fn read_function_entries_file(filename: &str) -> HashMap<u64, u64> {
+    let file = File::open(filename).unwrap();
+    let reader = BufReader::new(file);
+    let mut map = HashMap::new();
+
+    for line in reader.lines() {
+        let line = line.unwrap();
+        let parts: Vec<&str> = line.split('\t').collect();
+        let address = u64::from_str_radix(parts[0].trim_start_matches("0x"), 16).unwrap();
+        let size = parts[1].parse().unwrap();
+        map.insert(address, size);
+    }
+
+    map
+}
+
 fn main() {
     //1: filename 2: entry point
     let args: Vec<String> = env::args().collect();
@@ -294,6 +317,9 @@ fn main() {
     // let binary = read("shapes_mixed_stripped").expect("Error reading file");
     let f_slice = binary.as_slice();
     let elf_file = ElfBytes::<AnyEndian>::minimal_parse(f_slice).expect("Incorrect file format");
+
+    let mut function_entries= read_function_entries_file("shapes_mixed_args_functionEntries");
+    println!("{:#?}",function_entries);
 
     let (sct_headers, str_tab) = elf_file
         .section_headers_with_strtab()
@@ -316,7 +342,10 @@ fn main() {
         if (strname == ".data.rel.ro") {
             data_rel_section = header.sh_addr;
             data_rel_size = header.sh_size;
-            println!("{:#?} {:x} size: {:x}\n", strname, data_rel_section,data_rel_size);
+            println!(
+                "{:#?} {:x} size: {:x}\n",
+                strname, data_rel_section, data_rel_size
+            );
         }
     }
 
@@ -346,10 +375,5 @@ fn main() {
     print!("Main: {:x}\n", main_address + 7);
     print!("User Main: {:x}\n", user_main + 7);
 
-    find_traits(
-        &binary,
-        user_main + 7,
-        data_rel_section,
-        data_rel_size
-    );
+    find_traits(&binary, user_main + 7, data_rel_section, data_rel_size);
 }
