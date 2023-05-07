@@ -156,11 +156,10 @@ fn flags(rf: u32) -> String {
     sb
 }
 
-fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64) {
+fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64, mut function_entries: HashMap<u64,u64>) {
     //How to determine function's body??????????????????????????
     //Consider loading function addresses using Nucleus?
-    
-    let code = &binary[(addr) as usize..(addr + 0xfff) as usize];
+    let code = &binary[(addr) as usize..(addr + function_entries.get(&addr).unwrap()) as usize];
 
     //Must then check all the calls for possible trait objects
     let mut instruction_queue = Vec::new();
@@ -318,8 +317,8 @@ fn main() {
     let f_slice = binary.as_slice();
     let elf_file = ElfBytes::<AnyEndian>::minimal_parse(f_slice).expect("Incorrect file format");
 
+    // Create a HashMap with the addresses and sizes for each function
     let mut function_entries= read_function_entries_file("shapes_mixed_args_functionEntries");
-    println!("{:#?}",function_entries);
 
     let (sct_headers, str_tab) = elf_file
         .section_headers_with_strtab()
@@ -375,5 +374,5 @@ fn main() {
     print!("Main: {:x}\n", main_address + 7);
     print!("User Main: {:x}\n", user_main + 7);
 
-    find_traits(&binary, user_main + 7, data_rel_section, data_rel_size);
+    find_traits(&binary, user_main + 7, data_rel_section, data_rel_size, function_entries);
 }
