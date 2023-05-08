@@ -156,9 +156,10 @@ fn flags(rf: u32) -> String {
     sb
 }
 
-fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64, mut function_entries: HashMap<u64,u64>) {
+fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64, mut function_entries: &HashMap<u64,u64>) {
     //How to determine function's body??????????????????????????
     //Consider loading function addresses using Nucleus?
+    println!("Analyzing function at {:x}", addr);
     let code = &binary[(addr) as usize..(addr + function_entries.get(&addr).unwrap()) as usize];
 
     //Must then check all the calls for possible trait objects
@@ -198,9 +199,10 @@ fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64,
         let fpu_info = instr.fpu_stack_increment_info();
 
         
-
         if (instr.mnemonic() == Mnemonic::Call) {
-            function_call_queue.add((instr.ip(), instr));
+
+            function_call_queue.add((instr.memory_displacement64(), instr));
+            
             //need a way to check instruction queue length
             for i in (instruction_queue.len() - 3..instruction_queue.len() - 1).rev() {
                 let ins = &instruction_queue[i];
@@ -241,6 +243,18 @@ fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64,
             }
         }
     }
+
+    while function_call_queue.size()>0 {
+        let next_function = function_call_queue.remove().unwrap();
+        
+        find_traits(binary,next_function.0 , data_rel_addr, data_rel_size, &function_entries);
+    }
+
+    // There are not any more functions to check. 
+    if function_call_queue.size()<1{
+        return;
+    }
+
 
     // let instructions = handler.disasm_all(code, addr).unwrap();
 
@@ -329,8 +343,12 @@ fn main() {
         str_tab.expect("no string table"),
     );
 
+    
     // let shstrndx = elf_file.ehdr.e_shstrndx;
 
+
+    // data.rel.ro bytes stored for v-table extraction
+    let mut data_rel_data:&[u8]=&[0];
     let mut data_rel_section = 0;
     let mut data_rel_size = 0;
     //find .data.rel.ro -> where v-tables are stored
@@ -345,8 +363,11 @@ fn main() {
                 "{:#?} {:x} size: {:x}\n",
                 strname, data_rel_section, data_rel_size
             );
+            data_rel_data = elf_file.section_data(&header).unwrap().0;
         }
     }
+
+
 
     let cs = Capstone::new()
         .x86()
@@ -374,5 +395,5 @@ fn main() {
     print!("Main: {:x}\n", main_address + 7);
     print!("User Main: {:x}\n", user_main + 7);
 
-    find_traits(&binary, user_main + 7, data_rel_section, data_rel_size, function_entries);
+    find_traits(&binary, user_main + 7, data_rel_section, data_rel_size, &function_entries);
 }
