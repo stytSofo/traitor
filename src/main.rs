@@ -5,7 +5,7 @@
 
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     env::{self, args},
     fs::{read, File},
     slice::SplitInclusiveMut, io::{BufReader, BufRead},
@@ -159,12 +159,12 @@ fn flags(rf: u32) -> String {
 fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64, mut function_entries: &HashMap<u64,u64>) {
     //How to determine function's body??????????????????????????
     //Consider loading function addresses using Nucleus?
-    println!("Analyzing function at {:x}", addr);
+    println!("\nAnalyzing function at {:x}", addr);
     let code = &binary[(addr) as usize..(addr + function_entries.get(&addr).unwrap()) as usize];
 
     //Must then check all the calls for possible trait objects
     let mut instruction_queue = Vec::new();
-    let mut function_call_queue: Queue<(u64, Instruction)> = queue![];
+    let mut function_call_queue: VecDeque<(u64)> = VecDeque::new();
     let mut function_arguments: HashMap<u64, &[u64]> = HashMap::new();
 
     let mut decoder = Decoder::with_ip(64, code, addr, DecoderOptions::NONE);
@@ -199,9 +199,11 @@ fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64,
         let fpu_info = instr.fpu_stack_increment_info();
 
         
-        if (instr.mnemonic() == Mnemonic::Call) {
+        if (instr.mnemonic() == Mnemonic::Call && !instr.is_call_far_indirect() && !instr.is_call_near_indirect() ) {
 
-            function_call_queue.add((instr.memory_displacement64(), instr));
+            if(!function_call_queue.contains(&instr.memory_displacement64())){
+                function_call_queue.push_back(instr.memory_displacement64());
+            }
             
             //need a way to check instruction queue length
             for i in (instruction_queue.len() - 3..instruction_queue.len() - 1).rev() {
@@ -244,14 +246,17 @@ fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64,
         }
     }
 
-    while function_call_queue.size()>0 {
-        let next_function = function_call_queue.remove().unwrap();
-        
-        find_traits(binary,next_function.0 , data_rel_addr, data_rel_size, &function_entries);
+    println!("\n Function call queue at function {:x}: {:x?}",addr,function_call_queue);
+
+    while function_call_queue.len()>0 {
+        let next_function = *function_call_queue.get(0).unwrap();
+        function_call_queue.remove(0);
+
+        find_traits(binary,next_function , data_rel_addr, data_rel_size, &function_entries);
     }
 
     // There are not any more functions to check. 
-    if function_call_queue.size()<1{
+    if function_call_queue.len()<1{
         return;
     }
 
