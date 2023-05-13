@@ -17,11 +17,9 @@ use capstone::{
 };
 use elf::{
     endian::AnyEndian,
-    file::{self, Elf64_Ehdr},
-    ElfBytes, ElfStream,
+    ElfBytes,
 };
 use iced_x86::*;
-use queues::*;
 
 extern crate capstone;
 extern crate queues;
@@ -156,16 +154,19 @@ fn flags(rf: u32) -> String {
     sb
 }
 
-fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64, mut function_entries: &HashMap<u64,u64>) {
-    //How to determine function's body??????????????????????????
-    //Consider loading function addresses using Nucleus?
+fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64, function_entries: &mut HashMap<u64, (u64,bool)>) {
+    
+    let function_size = function_entries.get(&addr).unwrap().0;
+
+    function_entries.insert(addr, ( function_size ,true));
+    
     println!("\nAnalyzing function at {:x}", addr);
-    let code = &binary[(addr) as usize..(addr + function_entries.get(&addr).unwrap()) as usize];
+    let code = &binary[(addr) as usize..(addr + function_size) as usize];
 
     //Must then check all the calls for possible trait objects
     let mut instruction_queue = Vec::new();
     let mut function_call_queue: VecDeque<(u64)> = VecDeque::new();
-    let mut function_arguments: HashMap<u64, &[u64]> = HashMap::new();
+    // let mut function_arguments: HashMap<u64, &[u64]> = HashMap::new();
 
     let mut decoder = Decoder::with_ip(64, code, addr, DecoderOptions::NONE);
     let mut info_factory = InstructionInfoFactory::new();
@@ -187,34 +188,35 @@ fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64,
         output.clear();
         formatter.format(&instr, &mut output);
 
-        let offsets = decoder.get_constant_offsets(&instr);
         instruction_queue.push(instr);
 
         // For quick hacks, it's fine to use the Display trait to format an instruction,
         // but for real code, use a formatter, eg. MasmFormatter. See other examples.
         println!("{:016X} {}", instr.ip(), output);
 
-        let op_code = instr.op_code();
-        // let info = info_factory.info(&instr);
-        let fpu_info = instr.fpu_stack_increment_info();
 
         
-        if (instr.mnemonic() == Mnemonic::Call && !instr.is_call_far_indirect() && !instr.is_call_near_indirect() ) {
+        if instr.mnemonic() == Mnemonic::Call && !instr.is_call_far_indirect() && !instr.is_call_near_indirect() {
 
-            if(!function_call_queue.contains(&instr.memory_displacement64())){
+            //if we havent visited that address
+            if(!function_call_queue.contains(&instr.memory_displacement64()) && !function_entries.get(&instr.memory_displacement64()).unwrap().1){
                 function_call_queue.push_back(instr.memory_displacement64());
+
+                //mark the function as visited
+                function_entries.insert(instr.memory_displacement64(), ( function_entries.get(&instr.memory_displacement64()).unwrap().0 ,true));
             }
             
+            //Trait call checker needs expansion
             //need a way to check instruction queue length
             for i in (instruction_queue.len() - 3..instruction_queue.len() - 1).rev() {
                 let ins = &instruction_queue[i];
-                let ins_op_code = ins.op_code();
+                // let ins_op_code = ins.op_code();
                 let ins_info = info_factory.info(ins);
                 let mut trait_object_call = false;
                 for reg_info in ins_info.used_registers() {
                     //This is not always right
-                    if (reg_info.access() == OpAccess::Write) {
-                        if (reg_info.register() == Register::RSI) {
+                    if reg_info.access() == OpAccess::Write {
+                        if reg_info.register() == Register::RSI {
                             if ins.memory_displacement64() >= data_rel_addr
                                 && ins.memory_displacement64() <= data_rel_addr + data_rel_size
                             {
@@ -225,7 +227,7 @@ fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64,
                             }
                             // rsi_reg_val = (ins.memory_displacement64(), *ins);
                         }
-                        if (reg_info.register() == Register::RCX) {
+                        if reg_info.register() == Register::RCX {
                             if ins.memory_displacement64() >= data_rel_addr
                                 && ins.memory_displacement64() <= data_rel_addr + data_rel_size
                             {
@@ -252,7 +254,7 @@ fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64,
         let next_function = *function_call_queue.get(0).unwrap();
         function_call_queue.remove(0);
 
-        find_traits(binary,next_function , data_rel_addr, data_rel_size, &function_entries);
+        find_traits(binary,next_function , data_rel_addr, data_rel_size, function_entries);
     }
 
     // There are not any more functions to check. 
@@ -303,7 +305,7 @@ fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64,
 
 // print!("{:x?}",function_queue);
 
-fn read_function_entries_file(filename: &str) -> HashMap<u64, u64> {
+fn read_function_entries_file(filename: &str) ->HashMap<u64, (u64,bool)> {
     let file = File::open(filename).unwrap();
     let reader = BufReader::new(file);
     let mut map = HashMap::new();
@@ -313,7 +315,7 @@ fn read_function_entries_file(filename: &str) -> HashMap<u64, u64> {
         let parts: Vec<&str> = line.split('\t').collect();
         let address = u64::from_str_radix(parts[0].trim_start_matches("0x"), 16).unwrap();
         let size = parts[1].parse().unwrap();
-        map.insert(address, size);
+        map.insert(address, (size,false));
     }
 
     map
@@ -400,5 +402,5 @@ fn main() {
     print!("Main: {:x}\n", main_address + 7);
     print!("User Main: {:x}\n", user_main + 7);
 
-    find_traits(&binary, user_main + 7, data_rel_section, data_rel_size, &function_entries);
+    find_traits(&binary, user_main + 7, data_rel_section, data_rel_size, &mut function_entries);
 }
