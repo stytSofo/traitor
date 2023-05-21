@@ -156,7 +156,7 @@ fn flags(rf: u32) -> String {
 
 fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64, function_entries: &mut HashMap<u64, (u64,bool)>) {
     
-    let function_size = function_entries.get(&addr).unwrap().0;
+    let function_size = function_entries.get(&addr).expect("Address not found in the function entries file").0;
 
     function_entries.insert(addr, ( function_size ,true));
     
@@ -194,7 +194,9 @@ fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64,
         // but for real code, use a formatter, eg. MasmFormatter. See other examples.
         println!("{:016X} {}", instr.ip(), output);
 
-
+        if instruction_queue.len()<5 {
+            continue;
+        }
         
         if instr.mnemonic() == Mnemonic::Call && !instr.is_call_far_indirect() && !instr.is_call_near_indirect() {
 
@@ -208,7 +210,7 @@ fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64,
             
             //Trait call checker needs expansion
             //need a way to check instruction queue length
-            for i in (instruction_queue.len() - 3..instruction_queue.len() - 1).rev() {
+            for i in (instruction_queue.len() - 5..instruction_queue.len() - 1).rev() {
                 let ins = &instruction_queue[i];
                 // let ins_op_code = ins.op_code();
                 let ins_info = info_factory.info(ins);
