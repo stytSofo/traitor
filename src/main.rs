@@ -428,7 +428,7 @@ fn main() {
     let elf_file = ElfBytes::<AnyEndian>::minimal_parse(f_slice).expect("Incorrect file format");
 
     // Create a HashMap with the addresses and sizes for each function
-    let mut function_entries = read_function_entries_file("shapes_mixed_args_functionEntries");
+    let mut function_entries = read_function_entries_file("exa_functionEntries");
 
     let (sct_headers, str_tab) = elf_file
         .section_headers_with_strtab()
