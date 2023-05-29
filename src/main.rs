@@ -3,22 +3,19 @@
 // How the fuck do i add nucleus?????????
 // AND HOW DO I MAKE NUCLEUS WORK????????????????????
 
-
 use std::{
     collections::{HashMap, VecDeque},
     env::{self, args},
     fs::{read, File},
-    slice::SplitInclusiveMut, io::{BufReader, BufRead},
+    io::{BufRead, BufReader},
+    slice::SplitInclusiveMut,
 };
 
 use capstone::{
     prelude::{ArchDetail, BuildsCapstone, BuildsCapstoneSyntax},
     Capstone, Insn, InsnDetail, InsnGroupId, Instructions, RegId,
 };
-use elf::{
-    endian::AnyEndian,
-    ElfBytes,
-};
+use elf::{endian::AnyEndian, ElfBytes};
 use iced_x86::*;
 
 extern crate capstone;
@@ -68,8 +65,9 @@ fn locate_main(code: &[u8], addr: u64, handler: &Capstone) -> u64 {
         .expect("Instructions not found");
 
     let main_addr = (dis.as_ref()[0].bytes()[5] as u64 * 16 * 16 * 16 * 16)
-                        + (dis.as_ref()[0].bytes()[4] as u64 * 16 * 16)
-                        + (dis.as_ref()[0].bytes()[3] as u64) + dis.as_ref()[0].address();
+        + (dis.as_ref()[0].bytes()[4] as u64 * 16 * 16)
+        + (dis.as_ref()[0].bytes()[3] as u64)
+        + dis.as_ref()[0].address();
     return main_addr;
 }
 
@@ -154,12 +152,63 @@ fn flags(rf: u32) -> String {
     sb
 }
 
-fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64, function_entries: &mut HashMap<u64, (u64,bool)>) {
-    
-    let function_size = function_entries.get(&addr).expect("Address not found in the function entries file").0;
 
-    function_entries.insert(addr, ( function_size ,true));
+/**
+ * ----------------
+ * |   destructor |
+ * ----------------
+ * |    size      |
+ * ----------------
+ * |    allign    |
+ * ----------------
+ */
+fn valid_vtable(addr: u64, text_section_address:u64, text_section_size:u64 ,data_rel_addr: u64, data_rel_size: u64,data_rel_section:&[u8]) -> bool{
+
+    if addr>data_rel_addr+data_rel_size || addr<data_rel_addr{
+        print!("\n Addr: {:x} not in data rel ro\n",addr);
+        return false;
+    }
+
+    println!();
     
+    let index = addr-data_rel_addr;
+    let base:u64 = 16;
+
+    //check entry
+    let mut entry:u64=0;
+
+    for (i,bytes) in data_rel_section[index as usize .. (index+8)as usize].iter().enumerate(){
+        let mult = base.pow(2*i as u32);
+        
+        entry = entry + (*bytes as u64 * mult ) as u64;
+    }
+
+    if entry<text_section_address || entry>text_section_address+text_section_size{
+        print!("\n Entry: {:x} not in text\n",entry);
+
+        return false;
+    }
+
+    return true;
+}
+
+fn find_traits(
+    binary: &[u8],
+    addr: u64,
+    data_rel_addr: u64,
+    data_rel_size: u64,
+    function_entries: &mut HashMap<u64, (u64, bool)>,
+    data_rel_section:&[u8],
+    text_section_address:u64,
+    text_section_size:u64
+) {
+    let function_size = function_entries
+        .get(&addr)
+        .expect("Address not found in the function entries file")
+        .0;
+
+    function_entries.insert(addr, (function_size, true));
+
     println!("\nAnalyzing function at {:x}", addr);
     let code = &binary[(addr) as usize..(addr + function_size) as usize];
 
@@ -194,76 +243,114 @@ fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64,
         // but for real code, use a formatter, eg. MasmFormatter. See other examples.
         println!("{:016X} {}", instr.ip(), output);
 
-        if instruction_queue.len()<5 {
+        if instruction_queue.len() < 5 {
             continue;
         }
-        
-        if instr.mnemonic() == Mnemonic::Call && !instr.is_call_far_indirect() && !instr.is_call_near_indirect() {
 
-            //if we havent visited that address
-            if(!function_call_queue.contains(&instr.memory_displacement64()) && !function_entries.get(&instr.memory_displacement64()).unwrap().1){
-                function_call_queue.push_back(instr.memory_displacement64());
+        if instr.mnemonic() == Mnemonic::Call
+            && !instr.is_call_far_indirect()
+            && !instr.is_call_near_indirect()
+        {
+            //Did nucleus find the address?
+            if function_entries.contains_key(&instr.memory_displacement64()) {
+                //if we havent visited that address
+                if (!function_call_queue.contains(&instr.memory_displacement64())
+                    && !function_entries
+                        .get(&instr.memory_displacement64())
+                        .unwrap()
+                        .1)
+                {
+                    function_call_queue.push_back(instr.memory_displacement64());
 
-                //mark the function as visited
-                function_entries.insert(instr.memory_displacement64(), ( function_entries.get(&instr.memory_displacement64()).unwrap().0 ,true));
-            }
-            
-            //Trait call checker needs expansion
-            //need a way to check instruction queue length
-            for i in (instruction_queue.len() - 5..instruction_queue.len() - 1).rev() {
-                let ins = &instruction_queue[i];
-                // let ins_op_code = ins.op_code();
-                let ins_info = info_factory.info(ins);
-                let mut trait_object_call = false;
-                for reg_info in ins_info.used_registers() {
-                    //This is not always right
-                    if reg_info.access() == OpAccess::Write {
-                        if reg_info.register() == Register::RSI {
-                            if ins.memory_displacement64() >= data_rel_addr
-                                && ins.memory_displacement64() <= data_rel_addr + data_rel_size
-                            {
-                                println!("    V-Table Address: {:x}", ins.memory_displacement64());
-                                println!("TRAIT OBJECT");
-                                trait_object_call = true;
-                                break;
-                            }
-                            // rsi_reg_val = (ins.memory_displacement64(), *ins);
-                        }
-                        if reg_info.register() == Register::RCX {
-                            if ins.memory_displacement64() >= data_rel_addr
-                                && ins.memory_displacement64() <= data_rel_addr + data_rel_size
-                            {
-                                println!("    V-Table Address: {:x}", ins.memory_displacement64());
-                                println!("TRAIT OBJECT");
-                                trait_object_call = true;
-                                break;
-                            }
-                            // rcx_reg_val = (ins.memory_displacement64(), ins);
-                        }
-                    }
+                    //mark the function as visited
+                    function_entries.insert(
+                        instr.memory_displacement64(),
+                        (
+                            function_entries
+                                .get(&instr.memory_displacement64())
+                                .unwrap()
+                                .0,
+                            true,
+                        ),
+                    );
                 }
 
-                if (trait_object_call) {
-                    break;
+                //Trait call checker needs expansion
+                //need a way to check instruction queue length
+                for i in (instruction_queue.len() - 5..instruction_queue.len() - 1).rev() {
+                    let ins = &instruction_queue[i];
+                    // let ins_op_code = ins.op_code();
+                    let ins_info = info_factory.info(ins);
+                    let mut trait_object_call = false;
+                    for reg_info in ins_info.used_registers() {
+                        //This is not always right
+                        if reg_info.access() == OpAccess::Write {
+                            if reg_info.register() == Register::RSI {
+                                if ins.memory_displacement64() >= data_rel_addr
+                                    && ins.memory_displacement64() <= data_rel_addr + data_rel_size 
+                                    && valid_vtable(ins.memory_displacement64(), text_section_address, text_section_size, data_rel_addr, data_rel_size, data_rel_section)
+                                {
+                                    println!(
+                                        "    V-Table Address: {:x}",
+                                        ins.memory_displacement64()
+                                    );
+                                    println!("TRAIT OBJECT");
+                                    trait_object_call = true;
+                                    break;
+                                }
+                                // rsi_reg_val = (ins.memory_displacement64(), *ins);
+                            }
+                            if reg_info.register() == Register::RCX {
+                                if ins.memory_displacement64() >= data_rel_addr
+                                    && ins.memory_displacement64() <= data_rel_addr + data_rel_size
+                                    && valid_vtable(ins.memory_displacement64(), text_section_address, text_section_size, data_rel_addr, data_rel_size, data_rel_section)
+                                {
+                                    println!(
+                                        "    V-Table Address: {:x}",
+                                        ins.memory_displacement64()
+                                    );
+                                    println!("TRAIT OBJECT");
+                                    trait_object_call = true;
+                                    break;
+                                }
+                                // rcx_reg_val = (ins.memory_displacement64(), ins);
+                            }
+                        }
+                    }
+
+                    if (trait_object_call) {
+                        break;
+                    }
                 }
             }
         }
     }
 
-    println!("\n Function call queue at function {:x}: {:x?}",addr,function_call_queue);
+    println!(
+        "\n Function call queue at function {:x}: {:x?}",
+        addr, function_call_queue
+    );
 
-    while function_call_queue.len()>0 {
+    while function_call_queue.len() > 0 {
         let next_function = *function_call_queue.get(0).unwrap();
         function_call_queue.remove(0);
 
-        find_traits(binary,next_function , data_rel_addr, data_rel_size, function_entries);
+        find_traits(
+            binary,
+            next_function,
+            data_rel_addr,
+            data_rel_size,
+            function_entries,
+            data_rel_section,
+            text_section_address,
+            text_section_size,
+        );
     }
 
-    // There are not any more functions to check. 
-    if function_call_queue.len()<1{
+    // There are not any more functions to check.
+    if function_call_queue.len() < 1 {
         return;
     }
-
 
     // let instructions = handler.disasm_all(code, addr).unwrap();
 
@@ -307,7 +394,7 @@ fn find_traits(binary: &[u8], addr: u64, data_rel_addr: u64, data_rel_size: u64,
 
 // print!("{:x?}",function_queue);
 
-fn read_function_entries_file(filename: &str) ->HashMap<u64, (u64,bool)> {
+fn read_function_entries_file(filename: &str) -> HashMap<u64, (u64, bool)> {
     let file = File::open(filename).unwrap();
     let reader = BufReader::new(file);
     let mut map = HashMap::new();
@@ -317,7 +404,7 @@ fn read_function_entries_file(filename: &str) ->HashMap<u64, (u64,bool)> {
         let parts: Vec<&str> = line.split('\t').collect();
         let address = u64::from_str_radix(parts[0].trim_start_matches("0x"), 16).unwrap();
         let size = parts[1].parse().unwrap();
-        map.insert(address, (size,false));
+        map.insert(address, (size, false));
     }
 
     map
@@ -341,7 +428,7 @@ fn main() {
     let elf_file = ElfBytes::<AnyEndian>::minimal_parse(f_slice).expect("Incorrect file format");
 
     // Create a HashMap with the addresses and sizes for each function
-    let mut function_entries= read_function_entries_file("shapes_mixed_args_functionEntries");
+    let mut function_entries = read_function_entries_file("shapes_mixed_args_functionEntries");
 
     let (sct_headers, str_tab) = elf_file
         .section_headers_with_strtab()
@@ -352,14 +439,14 @@ fn main() {
         str_tab.expect("no string table"),
     );
 
-    
     // let shstrndx = elf_file.ehdr.e_shstrndx;
 
-
     // data.rel.ro bytes stored for v-table extraction
-    let mut data_rel_data:&[u8]=&[0];
+    let mut data_rel_data: &[u8] = &[0];
     let mut data_rel_section = 0;
     let mut data_rel_size = 0;
+    let mut text_section: u64 = 0;
+    let mut text_section_size: u64 = 0;
     //find .data.rel.ro -> where v-tables are stored
     for header in shdr {
         let strname = strtab
@@ -374,9 +461,15 @@ fn main() {
             );
             data_rel_data = elf_file.section_data(&header).unwrap().0;
         }
+        if (strname == ".text") {
+            text_section = header.sh_addr;
+            text_section_size = header.sh_size;
+            println!(
+                "{:#?} {:x} size: {:x}\n",
+                strname, text_section, text_section_size
+            );
+        }
     }
-
-
 
     let cs = Capstone::new()
         .x86()
@@ -385,9 +478,6 @@ fn main() {
         .detail(true)
         .build()
         .expect("Unable to build capstone");
-
-    // let data=&binary[0x51d50 as usize .. 0x51d70 as usize];
-    // print!("{:?}",data);
 
     let main_address = locate_main(
         &binary[entry_point_address as usize..(entry_point_address + 0xff) as usize],
@@ -404,5 +494,14 @@ fn main() {
     print!("Main: {:x}\n", main_address + 7);
     print!("User Main: {:x}\n", user_main + 7);
 
-    find_traits(&binary, user_main + 7, data_rel_section, data_rel_size, &mut function_entries);
+    find_traits(
+        &binary,
+        user_main + 7,
+        data_rel_section,
+        data_rel_size,
+        &mut function_entries,
+        data_rel_data,
+        text_section,
+        text_section_size
+    );
 }
